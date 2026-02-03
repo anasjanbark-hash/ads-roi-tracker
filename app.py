@@ -4,47 +4,50 @@ import pandas as pd
 st.set_page_config(page_title="Ads & AdMob Tracker", layout="wide")
 st.title("📊 Ads Cost vs AdMob Revenue Tracker")
 
-# 1. FILE UPLOADERS
+def find_column(df, possible_names):
+    """Matches messy excel headers to our needs"""
+    for col in df.columns:
+        if any(name.lower() in str(col).lower() for name in possible_names):
+            return col
+    return None
+
+def process_files(uploaded_files, col_types):
+    all_data = []
+    for f in uploaded_files:
+        try:
+            # Read all sheets
+            sheets = pd.read_excel(f, sheet_name=None, engine='openpyxl')
+            for name, df in sheets.items():
+                # Find the right columns
+                country_col = find_column(df, ['Country', 'Territory', 'Location', 'Geo'])
+                val_col = find_column(df, col_types)
+                
+                if country_col and val_col:
+                    clean_df = df[[country_col, val_col]].copy()
+                    clean_df.columns = ['Country', 'Value']
+                    # Remove total rows if they exist
+                    clean_df = clean_df[clean_df['Country'].astype(str).lower() != 'total']
+                    all_data.append(clean_df)
+        except Exception as e:
+            st.error(f"Could not read {f.name}: {e}")
+    
+    if not all_data:
+        return pd.DataFrame(columns=['Country', 'Value'])
+    
+    combined = pd.concat(all_data, ignore_index=True)
+    return combined.groupby('Country')['Value'].sum().reset_index()
+
+# UI Layout
 col1, col2 = st.columns(2)
 with col1:
-    cost_files = st.file_uploader("Upload Google Ads Cost Excels", accept_multiple_files=True, type=['xlsx'])
+    cost_files = st.file_uploader("Upload Google Ads Files", accept_multiple_files=True)
 with col2:
-    rev_files = st.file_uploader("Upload AdMob Revenue Excels", accept_multiple_files=True, type=['xlsx'])
+    rev_files = st.file_uploader("Upload AdMob Files", accept_multiple_files=True)
 
 if cost_files and rev_files:
-    # 2. PROCESS ADS COST
-    all_costs = []
-    for f in cost_files:
-        # Load all sheets from the file
-        sheets_dict = pd.read_excel(f, sheet_name=None)
-        for sheet_name, df in sheets_dict.items():
-            # Standardize column names (assuming they have 'Country' and 'Cost')
-            df.columns = [str(c).strip().title() for c in df.columns]
-            if 'Country' in df.columns and 'Cost' in df.columns:
-                all_costs.append(df[['Country', 'Cost']])
-    
-    cost_df = pd.concat(all_costs).groupby('Country').sum().reset_index()
+    # 'Cost' or 'Spent' for Google Ads; 'Revenue' or 'Earnings' for AdMob
+    df_cost = process_files(cost_files, ['Cost', 'Spent', 'Amount'])
+    df_rev = process_files(rev_files, ['Revenue', 'Earnings', 'Estimated'])
 
-    # 3. PROCESS ADMOB REVENUE
-    all_revs = []
-    for f in rev_files:
-        df = pd.read_excel(f)
-        df.columns = [str(c).strip().title() for c in df.columns]
-        # AdMob usually calls it 'Estimated Revenue' or 'Revenue'
-        # We rename it to 'Revenue' for consistency
-        rev_col = [c for c in df.columns if 'Revenue' in c][0]
-        all_revs.append(df[['Country', rev_col]].rename(columns={rev_col: 'Revenue'}))
-    
-    rev_df = pd.concat(all_revs).groupby('Country').sum().reset_index()
-
-    # 4. MERGE & CALCULATE
-    final_df = pd.merge(cost_df, rev_df, on='Country', how='outer').fillna(0)
-    final_df['Profit/Loss'] = final_df['Revenue'] - final_df['Cost']
-    final_df['ROI %'] = (final_df['Profit/Loss'] / final_df['Cost'] * 100).round(2)
-
-    # 5. DISPLAY RESULTS
-    st.divider()
-    st.subheader("Final Combined Country List")
-    st.dataframe(final_df.style.background_gradient(subset=['Profit/Loss'], cmap='RdYlGn'))
-else:
-    st.info("Please upload both Google Ads and AdMob files to begin.")
+    if not df_cost.empty and not df_rev.empty:
+        #
